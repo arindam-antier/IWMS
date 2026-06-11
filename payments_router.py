@@ -24,6 +24,16 @@ PAYMENT_STAGE_MAP = {
     PaymentStage.VISA:         WorkflowStage.VISA,
 }
 
+# Map payment stage → the officer role that is authorised to collect it.
+# Enquiry officers do NOT collect any fee — they only collect documents.
+PAYMENT_ROLE_GATE = {
+    PaymentStage.REGISTRATION: UserRole.RECEPTIONIST,
+    PaymentStage.COUNSELLING:  UserRole.COUNSELLOR,
+    PaymentStage.ADMISSION:    UserRole.ADMISSION,
+    PaymentStage.ENROLLMENT:   UserRole.ENROLLMENT,
+    PaymentStage.VISA:         UserRole.VISA,
+}
+
 
 @router.post("", response_model=PaymentOut, status_code=status.HTTP_201_CREATED)
 def collect_payment(
@@ -33,12 +43,28 @@ def collect_payment(
 ):
     """
     Record a fee payment for a student at a specific stage.
-    Amount is automatically set from the fixed fee schedule.
-    Prevents duplicate payment for the same stage.
+    - Amount is fixed from the fee schedule.
+    - Prevents duplicate payments.
+    - Enforces that only the correct officer role can collect each fee
+      (e.g. only a Counsellor can collect the counselling fee).
     """
     student = db.query(Student).filter(Student.id == payload.student_id).first()
     if not student:
         raise HTTPException(404, "Student not found.")
+
+    # ── Role gate: only the right officer can collect this fee ────────────────
+    authorized_role = PAYMENT_ROLE_GATE.get(payload.stage)
+    if (
+        authorized_role
+        and current_user.role not in (authorized_role, UserRole.SUPER_ADMIN)
+    ):
+        role_label = authorized_role.value.replace("_", " ").title()
+        raise HTTPException(
+            403,
+            f"Only a {role_label} (or Super Admin) can collect the "
+            f"{payload.stage.value} fee. "
+            f"You are logged in as {current_user.role.value.replace('_', ' ').title()}.",
+        )
 
     # Check for duplicate
     existing = db.query(Payment).filter(
@@ -48,7 +74,7 @@ def collect_payment(
     if existing:
         raise HTTPException(409, f"Payment for {payload.stage.value} already recorded.")
 
-    # Validate stage is correct for the student's current workflow position
+    # Validate student is at the right workflow stage
     expected_workflow_stage = PAYMENT_STAGE_MAP.get(payload.stage)
     if (
         expected_workflow_stage
@@ -57,8 +83,8 @@ def collect_payment(
     ):
         raise HTTPException(
             400,
-            f"Student is at {student.current_stage.value}, "
-            f"but this fee belongs to {expected_workflow_stage.value}."
+            f"Student is currently at '{student.current_stage.value}' stage, "
+            f"but the {payload.stage.value} fee belongs to '{expected_workflow_stage.value}' stage.",
         )
 
     amount = STAGE_FEES[payload.stage]

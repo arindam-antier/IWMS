@@ -29,6 +29,16 @@ class TokenResponse(BaseModel):
     name: str
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+
+class AdminResetPasswordRequest(BaseModel):
+    user_id: int
+    new_password: str = Field(..., min_length=6)
+
+
 # ─────────────────────────────────────────────
 # User / Officer
 # ─────────────────────────────────────────────
@@ -79,6 +89,7 @@ class StudentRegister(BaseModel):
     date_of_birth: Optional[str] = None
     address: Optional[str] = None
     passport_number: Optional[str] = None
+    password: str = Field(..., min_length=6, description="Initial login password for the student")
     payment_mode: PaymentMode = PaymentMode.CASH
     transaction_ref: Optional[str] = None
 
@@ -96,6 +107,7 @@ class StudentUpdate(BaseModel):
 
 class StudentOut(BaseModel):
     id: int
+    user_id: Optional[int]          # linked User account — used by admin to reset password
     student_code: str
     first_name: str
     last_name: str

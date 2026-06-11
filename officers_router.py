@@ -38,18 +38,26 @@ def create_officer(
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(409, "Email already registered.")
 
-    if payload.employee_id:
-        if db.query(User).filter(User.employee_id == payload.employee_id).first():
+    # Treat empty strings as None so the unique constraint on employee_id isn't violated
+    employee_id   = payload.employee_id.strip()   if payload.employee_id   else None
+    phone         = payload.phone.strip()          if payload.phone         else None
+    specialisation = payload.specialisation.strip() if payload.specialisation else None
+    employee_id   = employee_id   or None
+    phone         = phone         or None
+    specialisation = specialisation or None
+
+    if employee_id:
+        if db.query(User).filter(User.employee_id == employee_id).first():
             raise HTTPException(409, "Employee ID already taken.")
 
     officer = User(
         full_name=payload.full_name,
         email=payload.email,
-        phone=payload.phone,
+        phone=phone,
         hashed_password=hash_password(payload.password),
         role=payload.role,
-        employee_id=payload.employee_id,
-        specialisation=payload.specialisation,
+        employee_id=employee_id,
+        specialisation=specialisation,
         experience_years=payload.experience_years,
     )
     db.add(officer)

@@ -39,12 +39,18 @@ async def upload_document(
     notes: Optional[str] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_any_officer),
+    current_user: User = Depends(get_current_user),   # open to students + officers
 ):
     """
-    Upload a document for a student. Only officers can upload.
-    File is stored in the uploads/ directory with a UUID filename.
+    Upload a document for a student.
+    - Officers can upload for any student in their stage.
+    - Students can only upload documents for themselves.
     """
+    # Students can only upload to their own profile
+    if current_user.role == UserRole.STUDENT:
+        own_student = db.query(Student).filter(Student.user_id == current_user.id).first()
+        if not own_student or own_student.id != student_id:
+            raise HTTPException(403, "Students can only upload documents for their own profile.")
     # Validate file type
     if file.content_type not in ALLOWED_MIME:
         raise HTTPException(

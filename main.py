@@ -7,45 +7,8 @@
 ║  Seed DB:  python seed.py   (first time only)                    ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-API surface
-──────────────────────────────────────────────────────────────────
-POST   /api/auth/login                     → JWT for all 8 roles
-GET    /api/auth/me                        → current user profile
-
-GET    /api/students                       → list (role-filtered)
-POST   /api/students                       → register student (Reception)
-GET    /api/students/me/profile            → student self-view
-GET    /api/students/{id}                  → detail + docs/payments/logs
-PATCH  /api/students/{id}                  → update profile
-PATCH  /api/students/{id}/enquiry-profile  → Stage 2 profile update
-PATCH  /api/students/{id}/stage-status     → update status within stage
-POST   /api/students/{id}/advance-stage    → advance + assign next officer
-
-POST   /api/documents                      → upload file (multipart)
-GET    /api/documents?student_id=          → list documents
-DELETE /api/documents/{id}                 → remove document
-
-POST   /api/payments                       → collect fee
-GET    /api/payments                       → list (role-filtered)
-GET    /api/payments/summary               → revenue breakdown (admin)
-
-POST   /api/visa/decision                  → visa approve/reject/hold
-GET    /api/visa/refunds                   → list refunds (admin)
-PATCH  /api/visa/refunds/{id}              → approve/reject refund (admin)
-
-GET    /api/officers                       → list officers (admin)
-POST   /api/officers                       → create officer account (admin)
-GET    /api/officers/{id}                  → officer detail
-PATCH  /api/officers/{id}                  → update officer
-DELETE /api/officers/{id}                  → deactivate officer
-
-GET    /api/audit                          → audit logs (role-filtered)
-GET    /api/notifications                  → user notifications
-PATCH  /api/notifications/{id}/read        → mark one read
-PATCH  /api/notifications/read-all         → mark all read
-
-GET    /api/admin/stats                    → KPI dashboard (admin)
-GET    /api/admin/officers/workload        → per-officer student count
+FIXED: Router imports changed from `routers.X` → `X` so all files
+can live flat in the same directory (no routers/ subfolder needed).
 """
 
 import os
@@ -53,7 +16,6 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -61,15 +23,18 @@ from config import get_settings
 from database import engine
 from models import Base
 
-# Routers
-from routers.auth_router    import router as auth_router
-from routers.students_router import router as students_router
-from routers.documents_router import router as documents_router
-from routers.payments_router  import router as payments_router
-from routers.visa_router      import router as visa_router
-from routers.officers_router  import router as officers_router
-from routers.audit_router     import audit_router, notif_router
-from routers.admin_router     import router as admin_router
+# ── Routers imported from the SAME flat directory ──────────────────────────────
+# (Previously imported as `from routers.X import ...` which requires a
+#  routers/ subdirectory with an __init__.py — this caused the server to
+#  crash on startup and every login request to hang forever.)
+from auth_router     import router as auth_router
+from students_router import router as students_router
+from documents_router import router as documents_router
+from payments_router  import router as payments_router
+from visa_router      import router as visa_router
+from officers_router  import router as officers_router
+from audit_router     import audit_router, notif_router
+from admin_router     import router as admin_router
 
 settings = get_settings()
 
@@ -112,7 +77,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],          # In production: specify frontend origin(s)
+    allow_origins=["*"],          # In production: specify your frontend origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
