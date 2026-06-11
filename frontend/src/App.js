@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─── API CONFIG ───────────────────────────────────────────────────────────────
 const API_BASE = "http://127.0.0.1:8000";
@@ -717,77 +717,578 @@ function Sidebar({ user, activeTab, setActiveTab, onLogout, onChangePassword }) 
   );
 }
 
+// ─── CHART.JS LOADER ─────────────────────────────────────────────────────────
+let chartJsLoaded = false;
+let chartJsCallbacks = [];
+function loadChartJs(cb) {
+  if (chartJsLoaded) { cb(); return; }
+  chartJsCallbacks.push(cb);
+  if (chartJsCallbacks.length > 1) return;
+  const s = document.createElement("script");
+  s.src = "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js";
+  s.onload = () => { chartJsLoaded = true; chartJsCallbacks.forEach(fn => fn()); chartJsCallbacks = []; };
+  document.head.appendChild(s);
+}
+
+// ─── MINI LINE SPARKLINE ──────────────────────────────────────────────────────
+function Sparkline({ data, color }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    loadChartJs(() => {
+      if (!canvasRef.current) return;
+      if (chartRef.current) chartRef.current.destroy();
+      chartRef.current = new window.Chart(canvasRef.current, {
+        type: "line",
+        data: {
+          labels: data.map((_, i) => i),
+          datasets: [{ data, borderColor: color, borderWidth: 2, tension: 0.4, pointRadius: 0, fill: true,
+            backgroundColor: color + "18" }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          animation: { duration: 600 },
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: { x: { display: false }, y: { display: false } },
+        },
+      });
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [data, color]);
+  return <canvas ref={canvasRef} aria-hidden="true" />;
+}
+
+// ─── DONUT CHART ──────────────────────────────────────────────────────────────
+function DonutChart({ data, labels, colors }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    loadChartJs(() => {
+      if (!canvasRef.current) return;
+      if (chartRef.current) chartRef.current.destroy();
+      chartRef.current = new window.Chart(canvasRef.current, {
+        type: "doughnut",
+        data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: "#fff", hoverOffset: 6 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          cutout: "68%",
+          animation: { duration: 800, easing: "easeInOutQuart" },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => ` ${ctx.label}: ${ctx.raw} students`,
+              },
+            },
+          },
+        },
+      });
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [JSON.stringify(data)]);
+  return <canvas ref={canvasRef} aria-label="Donut chart showing student distribution by stage" role="img" />;
+}
+
+// ─── HORIZONTAL BAR CHART ────────────────────────────────────────────────────
+// ─── REVENUE BAR CHART ───────────────────────────────────────────────────────
+function RevenueBarChart({ labels, data }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(() => {
+    loadChartJs(() => {
+      if (!canvasRef.current) return;
+      if (chartRef.current) chartRef.current.destroy();
+      chartRef.current = new window.Chart(canvasRef.current, {
+        type: "bar",
+        data: {
+          labels,
+          datasets: [{
+            label: "Revenue (₹)",
+            data,
+            backgroundColor: ["#4f46e5cc","#7c3aedcc","#0891b2cc","#059669cc","#d97706cc"],
+            borderRadius: 8,
+            borderSkipped: false,
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          animation: { duration: 800 },
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (ctx) => ` ₹${ctx.raw.toLocaleString()}` } },
+          },
+          scales: {
+            x: {
+              grid: { display: false },
+              ticks: { color: "#374151", font: { size: 12 } },
+            },
+            y: {
+              grid: { color: "#f3f4f6", drawBorder: false },
+              ticks: {
+                color: "#9ca3af", font: { size: 11 },
+                callback: (v) => `₹${(v/1000).toFixed(0)}k`,
+              },
+            },
+          },
+        },
+      });
+    });
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [JSON.stringify(data)]);
+  return <canvas ref={canvasRef} aria-label="Bar chart showing revenue per fee category" role="img" />;
+}
+
 // ─── ADMIN DASHBOARD ─────────────────────────────────────────────────────────
 function AdminDashboard({ token }) {
   const [stats, setStats] = useState(null);
   const [workload, setWorkload] = useState([]);
+  const [paymentSummary, setPaymentSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  useEffect(() => {
+  const load = () => {
+    setLoading(true);
     Promise.all([
       apiFetch("/api/admin/stats", {}, token),
       apiFetch("/api/admin/officers/workload", {}, token),
-    ]).then(([s, w]) => { setStats(s); setWorkload(w); }).catch(console.error).finally(() => setLoading(false));
-  }, [token]);
+      apiFetch("/api/payments/summary", {}, token).catch(() => null),
+    ]).then(([s, w, p]) => {
+      setStats(s); setWorkload(w); setPaymentSummary(p);
+    }).catch(console.error).finally(() => setLoading(false));
+  };
 
-  if (loading) return <div style={{ display: "flex", justifyContent: "center", padding: 60 }}><Spinner size={40} /></div>;
+  useEffect(() => { load(); }, [token, refreshKey]);
+
+  if (loading) return (
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 80, gap: 16 }}>
+      <Spinner size={44} />
+      <p style={{ color: "#9ca3af", fontSize: 14, margin: 0 }}>Loading analytics…</p>
+    </div>
+  );
+
+  const stageData = STAGES.map(s => stats?.students_by_stage?.[s.key] || 0);
+  const totalStudents = stats?.total_students || 0;
+  const totalRevenue = stats?.total_revenue || 0;
+  const completedCount = stats?.students_by_stage?.completed || 0;
+  const completionRate = totalStudents > 0 ? Math.round((completedCount / totalStudents) * 100) : 0;
+  const visaCount = stats?.students_by_stage?.visa || 0;
+  const activeCount = totalStudents - completedCount;
+
+  // Revenue breakdown from payment summary
+  const feeLabels = ["Registration", "Counselling", "Admission", "Enrollment", "Visa"];
+  const feeKeys = ["registration", "counselling", "admission", "enrollment", "visa"];
+  const feeRevenue = feeKeys.map(k => paymentSummary?.[k]?.total || 0);
+  const feeCounts = feeKeys.map(k => paymentSummary?.[k]?.count || 0);
+
+  // Sparkline mock trend (simulate 7-period trend from real total)
+  const sparkBase = totalStudents > 0 ? [
+    Math.max(0, totalStudents - 6), Math.max(0, totalStudents - 5),
+    Math.max(0, totalStudents - 4), Math.max(0, totalStudents - 3),
+    Math.max(0, totalStudents - 2), Math.max(0, totalStudents - 1),
+    totalStudents,
+  ] : [0, 0, 0, 0, 0, 0, 0];
+
+  const stageColors = ["#0891b2","#059669","#d97706","#dc2626","#7c3aed","#0284c7","#16a34a"];
+  const stageLabels = STAGES.map(s => s.label);
+
+  // Officer workload sorted desc
+  const sortedWorkload = [...workload].sort((a, b) => b.active_students - a.active_students);
+  const maxLoad = sortedWorkload[0]?.active_students || 1;
 
   const kpis = [
-    { label: "Total Students", value: stats?.total_students, icon: "👥", color: "#4f46e5" },
-    { label: "Total Officers", value: stats?.total_officers, icon: "👔", color: "#059669" },
-    { label: "Total Revenue", value: `₹${(stats?.total_revenue || 0).toLocaleString()}`, icon: "💰", color: "#d97706" },
-    { label: "Pending Refunds", value: stats?.pending_refunds, icon: "↩️", color: "#dc2626" },
+    {
+      label: "Total Students",
+      value: totalStudents,
+      sub: `${activeCount} active`,
+      color: "#4f46e5",
+      spark: sparkBase,
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+      ),
+    },
+    {
+      label: "Total Officers",
+      value: stats?.total_officers || 0,
+      sub: "across all stages",
+      color: "#059669",
+      spark: [2,2,3,3,4,4, stats?.total_officers || 4],
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+        </svg>
+      ),
+    },
+    {
+      label: "Total Revenue",
+      value: `₹${totalRevenue >= 100000 ? (totalRevenue/100000).toFixed(1)+"L" : totalRevenue.toLocaleString()}`,
+      sub: `${feeCounts.reduce((a,b)=>a+b,0)} payments collected`,
+      color: "#d97706",
+      spark: feeRevenue.map(v => v > 0 ? v : 0),
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+        </svg>
+      ),
+    },
+    {
+      label: "Completion Rate",
+      value: `${completionRate}%`,
+      sub: `${completedCount} students completed`,
+      color: "#16a34a",
+      spark: [0, completionRate * 0.2, completionRate * 0.4, completionRate * 0.55, completionRate * 0.72, completionRate * 0.88, completionRate].map(Math.round),
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="20 6 9 17 4 12"/>
+        </svg>
+      ),
+    },
+    {
+      label: "Pending Refunds",
+      value: stats?.pending_refunds || 0,
+      sub: stats?.pending_refunds > 0 ? "Needs review" : "All clear",
+      color: stats?.pending_refunds > 0 ? "#dc2626" : "#6b7280",
+      spark: [0,0,0,0,0,0, stats?.pending_refunds || 0],
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.58"/>
+        </svg>
+      ),
+    },
+    {
+      label: "At Visa Stage",
+      value: visaCount,
+      sub: "final processing",
+      color: "#0284c7",
+      spark: [0, 0, visaCount * 0.3, visaCount * 0.5, visaCount * 0.7, visaCount * 0.9, visaCount].map(v => Math.round(v)),
+      icon: (
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M17.8 19.2L16 11l3.5-3.5C21 6 21 4 19 2c-2-2-4-2-5.5-.5L10 5 1.8 6.2"/>
+          <path d="M5 10l1 1"/><path d="M10 5l1 1"/>
+          <path d="M2 22l10-10"/>
+        </svg>
+      ),
+    },
   ];
 
   return (
-    <div>
-      <h2 style={{ fontSize: 22, fontWeight: 800, color: "#111827", margin: "0 0 20px" }}>System Dashboard</h2>
+    <div style={{ fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+      <style>{`
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+        .dash-kpi { animation: fadeInUp 0.35s ease both; }
+        .dash-kpi:hover { box-shadow: 0 4px 20px rgba(0,0,0,0.08) !important; transform: translateY(-1px); transition: all 0.2s; }
+        .dash-card { animation: fadeInUp 0.4s ease both; }
+        .workload-row:hover { background: #f9fafb; border-radius: 8px; }
+        .refresh-btn:hover { background: #e0e7ff !important; }
+        .stage-pill:hover { opacity: 0.85; transform: scale(1.03); transition: all 0.15s; }
+      `}</style>
 
-      {/* KPIs */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 24 }}>
-        {kpis.map(k => (
-          <Card key={k.label} style={{ display: "flex", gap: 14, alignItems: "center" }}>
-            <div style={{ width: 46, height: 46, background: k.color + "15", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 22, flexShrink: 0 }}>{k.icon}</div>
-            <div>
-              <p style={{ margin: 0, fontSize: 22, fontWeight: 800, color: k.color }}>{k.value ?? "—"}</p>
-              <p style={{ margin: 0, fontSize: 12, color: "#6b7280" }}>{k.label}</p>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+        <div>
+          <h2 style={{ fontSize: 24, fontWeight: 800, color: "#111827", margin: "0 0 4px", letterSpacing: "-0.4px" }}>
+            Analytics Dashboard
+          </h2>
+          <p style={{ margin: 0, fontSize: 13, color: "#9ca3af" }}>
+            Immigration workflow overview · Live data
+          </p>
+        </div>
+        <button
+          className="refresh-btn"
+          onClick={() => setRefreshKey(k => k + 1)}
+          style={{
+            display: "flex", alignItems: "center", gap: 6, padding: "8px 14px",
+            background: "#eef2ff", border: "1.5px solid #c7d2fe", borderRadius: 9,
+            color: "#4f46e5", fontSize: 13, fontWeight: 600, cursor: "pointer",
+            transition: "background 0.15s",
+          }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-3.58"/>
+          </svg>
+          Refresh
+        </button>
+      </div>
+
+      {/* KPI Cards Grid */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 24 }}>
+        {kpis.map((k, i) => (
+          <div key={k.label} className="dash-kpi" style={{
+            animationDelay: `${i * 60}ms`,
+            background: "#fff", borderRadius: 14, padding: "16px 18px",
+            boxShadow: "0 1px 6px rgba(0,0,0,0.06)", border: "1px solid #f0f0f0",
+            cursor: "default", transition: "box-shadow 0.2s, transform 0.2s",
+            display: "flex", flexDirection: "column", gap: 10,
+          }}>
+            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
+              <div>
+                <p style={{ margin: 0, fontSize: 12, color: "#9ca3af", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.6px" }}>{k.label}</p>
+                <p style={{ margin: "6px 0 2px", fontSize: 26, fontWeight: 800, color: "#111827", lineHeight: 1.1, letterSpacing: "-0.5px" }}>{k.value ?? "—"}</p>
+                <p style={{ margin: 0, fontSize: 11, color: k.color, fontWeight: 600 }}>{k.sub}</p>
+              </div>
+              <div style={{
+                width: 40, height: 40, background: k.color + "12", borderRadius: 10,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                color: k.color, flexShrink: 0,
+              }}>
+                {k.icon}
+              </div>
             </div>
-          </Card>
+            <div style={{ height: 36, opacity: 0.8 }}>
+              <Sparkline data={k.spark} color={k.color} />
+            </div>
+          </div>
         ))}
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
-        {/* Stage Distribution */}
-        <Card>
-          <h3 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#111827" }}>Students by Stage</h3>
-          {STAGES.map(stage => {
-            const count = stats?.students_by_stage?.[stage.key] || 0;
-            const max = Math.max(...Object.values(stats?.students_by_stage || {}));
+      {/* Middle Row: Donut + Stage Bar */}
+      <div style={{ display: "grid", gridTemplateColumns: "340px 1fr", gap: 16, marginBottom: 16 }}>
+
+        {/* Donut: Stage Distribution */}
+        <Card className="dash-card" style={{ animationDelay: "200ms" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Stage Distribution</h3>
+            <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>{totalStudents} total</span>
+          </div>
+
+          <div style={{ display: "flex", gap: 16, alignItems: "center" }}>
+            <div style={{ width: 130, height: 130, flexShrink: 0, position: "relative" }}>
+              <DonutChart
+                data={stageData}
+                labels={stageLabels}
+                colors={stageColors}
+              />
+              <div style={{
+                position: "absolute", inset: 0, display: "flex",
+                flexDirection: "column", alignItems: "center", justifyContent: "center",
+                pointerEvents: "none",
+              }}>
+                <p style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#111827", lineHeight: 1 }}>{totalStudents}</p>
+                <p style={{ margin: "2px 0 0", fontSize: 10, color: "#9ca3af", fontWeight: 600 }}>Students</p>
+              </div>
+            </div>
+
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 5 }}>
+              {STAGES.map((stage, i) => {
+                const count = stageData[i];
+                const pct = totalStudents > 0 ? Math.round((count / totalStudents) * 100) : 0;
+                return (
+                  <div key={stage.key} className="stage-pill" style={{
+                    display: "flex", alignItems: "center", gap: 6, cursor: "default",
+                  }}>
+                    <div style={{ width: 8, height: 8, borderRadius: "50%", background: stageColors[i], flexShrink: 0 }} />
+                    <span style={{ fontSize: 11, color: "#6b7280", flex: 1 }}>{stage.label}</span>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#374151", minWidth: 18, textAlign: "right" }}>{count}</span>
+                    <div style={{ width: 36, background: "#f3f4f6", borderRadius: 3, height: 4 }}>
+                      <div style={{ width: `${pct}%`, height: "100%", background: stageColors[i], borderRadius: 3, transition: "width 0.6s ease" }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+
+        {/* Pipeline Funnel */}
+        <Card className="dash-card" style={{ animationDelay: "260ms" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <div>
+              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Workflow Pipeline</h3>
+              <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>Cumulative students reaching each stage</p>
+            </div>
+            <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>
+              {completionRate}% completion
+            </span>
+          </div>
+          {(() => {
+            // Cumulative: students who have REACHED each stage = sum of all from that stage onward
+            const activeStages = STAGES.filter(s => s.key !== "completed");
+            const cumulativeCounts = activeStages.map((stage, i) => {
+              return activeStages.slice(i).reduce((sum, s) => sum + (stats?.students_by_stage?.[s.key] || 0), 0)
+                + (stats?.students_by_stage?.completed || 0);
+            });
+            const peak = cumulativeCounts[0] || 1;
             return (
-              <div key={stage.key} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-                <span style={{ width: 80, fontSize: 12, color: "#6b7280", flexShrink: 0 }}>{stage.label}</span>
-                <div style={{ flex: 1, background: "#f3f4f6", borderRadius: 4, height: 8 }}>
-                  <div style={{ width: `${max ? (count / max) * 100 : 0}%`, height: "100%", background: stage.color, borderRadius: 4, transition: "width 0.5s" }} />
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {activeStages.map((stage, i) => {
+                  const cumCount = cumulativeCounts[i];
+                  const widthPct = Math.round((cumCount / peak) * 100);
+                  const dropPct = i > 0 ? Math.round(((cumulativeCounts[i-1] - cumCount) / (cumulativeCounts[i-1] || 1)) * 100) : null;
+                  return (
+                    <div key={stage.key}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                        <span style={{ width: 72, fontSize: 11, color: "#6b7280", fontWeight: 600, flexShrink: 0, textAlign: "right" }}>{stage.label}</span>
+                        <div style={{ flex: 1, background: "#f3f4f6", borderRadius: 5, height: 22, position: "relative", overflow: "hidden" }}>
+                          <div style={{
+                            width: `${widthPct}%`, height: "100%", borderRadius: 5,
+                            background: `linear-gradient(90deg, ${stage.color}cc, ${stage.color})`,
+                            transition: "width 0.7s ease",
+                            display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 6,
+                          }}>
+                            {widthPct > 18 && (
+                              <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{cumCount}</span>
+                            )}
+                          </div>
+                          {widthPct <= 18 && (
+                            <span style={{ position: "absolute", left: `${widthPct}%`, top: "50%", transform: "translateY(-50%)", fontSize: 11, fontWeight: 700, color: "#374151", paddingLeft: 5 }}>{cumCount}</span>
+                          )}
+                        </div>
+                        {dropPct !== null && dropPct > 0 ? (
+                          <span style={{ fontSize: 10, color: "#ef4444", fontWeight: 700, minWidth: 36, textAlign: "right" }}>−{dropPct}%</span>
+                        ) : dropPct === 0 ? (
+                          <span style={{ fontSize: 10, color: "#9ca3af", minWidth: 36 }}></span>
+                        ) : (
+                          <span style={{ minWidth: 36 }} />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+                {/* Completed row */}
+                <div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
+                    <span style={{ width: 72, fontSize: 11, color: "#16a34a", fontWeight: 700, flexShrink: 0, textAlign: "right" }}>✓ Done</span>
+                    <div style={{ flex: 1, background: "#f0fdf4", borderRadius: 5, height: 22, position: "relative", overflow: "hidden", border: "1px solid #bbf7d0" }}>
+                      <div style={{
+                        width: `${Math.round(((stats?.students_by_stage?.completed || 0) / peak) * 100)}%`,
+                        height: "100%", borderRadius: 5,
+                        background: "linear-gradient(90deg, #10b981cc, #059669)",
+                        transition: "width 0.7s ease",
+                        display: "flex", alignItems: "center", justifyContent: "flex-end", paddingRight: 6,
+                      }}>
+                        {Math.round(((stats?.students_by_stage?.completed || 0) / peak) * 100) > 10 && (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{stats?.students_by_stage?.completed || 0}</span>
+                        )}
+                      </div>
+                    </div>
+                    <span style={{ fontSize: 10, color: "#059669", fontWeight: 700, minWidth: 36, textAlign: "right" }}>{completionRate}%</span>
+                  </div>
                 </div>
-                <span style={{ width: 24, fontSize: 13, fontWeight: 700, color: "#374151", textAlign: "right" }}>{count}</span>
               </div>
             );
-          })}
+          })()}
+        </Card>
+      </div>
+
+      {/* Bottom Row: Revenue + Officer Workload */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+
+        {/* Revenue by Fee Type */}
+        <Card className="dash-card" style={{ animationDelay: "320ms" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Revenue by Fee Category</h3>
+            <span style={{ fontSize: 12, color: "#059669", fontWeight: 700, background: "#f0fdf4", padding: "3px 9px", borderRadius: 6, border: "1px solid #bbf7d0" }}>
+              ₹{totalRevenue.toLocaleString()}
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            {feeLabels.map((label, i) => (
+              <div key={label} style={{
+                background: "#fafafa", border: "1px solid #f0f0f0",
+                borderRadius: 8, padding: "6px 10px", textAlign: "center", flex: 1, minWidth: 70,
+              }}>
+                <p style={{ margin: 0, fontSize: 13, fontWeight: 700, color: "#111827" }}>
+                  {feeRevenue[i] >= 100000 ? `₹${(feeRevenue[i]/100000).toFixed(1)}L` : `₹${(feeRevenue[i]/1000).toFixed(0)}k`}
+                </p>
+                <p style={{ margin: "2px 0 0", fontSize: 10, color: "#9ca3af" }}>{label}</p>
+                <p style={{ margin: "2px 0 0", fontSize: 10, color: "#6b7280", fontWeight: 600 }}>{feeCounts[i]} paid</p>
+              </div>
+            ))}
+          </div>
+          <div style={{ height: 160 }}>
+            <RevenueBarChart labels={feeLabels} data={feeRevenue} />
+          </div>
         </Card>
 
         {/* Officer Workload */}
-        <Card>
-          <h3 style={{ margin: "0 0 16px", fontSize: 15, fontWeight: 700, color: "#111827" }}>Officer Workload</h3>
-          {workload.length === 0 ? <p style={{ color: "#9ca3af", fontSize: 14 }}>No data</p> : (
-            workload.map(w => (
-              <div key={w.officer_id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, paddingBottom: 10, borderBottom: "1px solid #f3f4f6" }}>
-                <div>
-                  <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#111827" }}>{w.name}</p>
-                  <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{ROLES[w.role]?.label || w.role}</p>
-                </div>
-                <Badge color={w.active_students > 5 ? "#dc2626" : "#059669"}>{w.active_students} students</Badge>
+        <Card className="dash-card" style={{ animationDelay: "380ms" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: "#111827" }}>Officer Workload</h3>
+            <span style={{ fontSize: 11, color: "#9ca3af", fontWeight: 600 }}>{workload.length} officers assigned</span>
+          </div>
+
+          {workload.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "32px 0" }}>
+              <div style={{ fontSize: 32, marginBottom: 8 }}>📋</div>
+              <p style={{ color: "#9ca3af", fontSize: 13, margin: 0 }}>No assignments yet</p>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 310, overflowY: "auto" }}>
+              {sortedWorkload.map((w, i) => {
+                const pct = Math.round((w.active_students / maxLoad) * 100);
+                const isHigh = w.active_students > 5;
+                const roleInfo = ROLES[w.role] || {};
+                return (
+                  <div key={w.officer_id} className="workload-row" style={{
+                    padding: "8px 10px", transition: "background 0.15s", borderRadius: 8,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                      <div style={{
+                        width: 30, height: 30, borderRadius: 8, flexShrink: 0,
+                        background: (roleInfo.color || "#6b7280") + "18",
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 14, border: `1px solid ${(roleInfo.color || "#6b7280")}30`,
+                      }}>
+                        {roleInfo.icon || "👤"}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{w.name}</p>
+                        <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>{roleInfo.label || w.role}</p>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexShrink: 0 }}>
+                        <span style={{
+                          fontSize: 13, fontWeight: 800, color: isHigh ? "#dc2626" : "#059669",
+                        }}>{w.active_students}</span>
+                        <span style={{ fontSize: 10, color: "#9ca3af" }}>students</span>
+                        {isHigh && (
+                          <span style={{
+                            fontSize: 9, fontWeight: 700, background: "#fef2f2",
+                            color: "#dc2626", border: "1px solid #fecaca",
+                            borderRadius: 4, padding: "1px 5px",
+                          }}>HIGH</span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ height: 5, background: "#f3f4f6", borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{
+                        width: `${pct}%`, height: "100%", borderRadius: 3, transition: "width 0.6s ease",
+                        background: isHigh
+                          ? "linear-gradient(90deg, #f97316, #dc2626)"
+                          : "linear-gradient(90deg, #4f46e5, #7c3aed)",
+                      }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Summary footer */}
+          {workload.length > 0 && (
+            <div style={{
+              marginTop: 14, paddingTop: 12, borderTop: "1px solid #f3f4f6",
+              display: "flex", gap: 16,
+            }}>
+              <div>
+                <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>Avg load</p>
+                <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#374151" }}>
+                  {(workload.reduce((a, b) => a + b.active_students, 0) / workload.length).toFixed(1)} <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>/ officer</span>
+                </p>
               </div>
-            ))
+              <div>
+                <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>Max load</p>
+                <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: "#374151" }}>
+                  {maxLoad} <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>students</span>
+                </p>
+              </div>
+              <div>
+                <p style={{ margin: 0, fontSize: 11, color: "#9ca3af" }}>Overloaded</p>
+                <p style={{ margin: 0, fontSize: 15, fontWeight: 700, color: workload.filter(w => w.active_students > 5).length > 0 ? "#dc2626" : "#059669" }}>
+                  {workload.filter(w => w.active_students > 5).length} <span style={{ fontSize: 11, fontWeight: 400, color: "#9ca3af" }}>officers</span>
+                </p>
+              </div>
+            </div>
           )}
         </Card>
       </div>
